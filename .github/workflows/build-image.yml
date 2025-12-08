@@ -6,11 +6,6 @@ on:
       - main
   schedule:
     - cron: "0 1 * * TUE"
-  push:
-    branches:
-      - main
-    paths-ignore:
-      - "**/README.md"
   workflow_dispatch:
 
 jobs:
