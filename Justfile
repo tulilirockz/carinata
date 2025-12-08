@@ -1,3 +1,5 @@
+refresh: delete create-mac
+
 image := env("IMAGE_FULL", "ghcr.io/tulilirockz/carinata:latest")
 
 iso $image=image:
@@ -18,3 +20,20 @@ iso $image=image:
         --type qcow2 \
         --use-librepo=True \
         "${image}"
+
+create:
+    limactl create \
+        --name=docker \
+        --yes \
+        ./docker-centos-rootful.yaml
+
+create-mac:
+    limactl create \
+        --mount /var/folders:w \
+        --mount /private/var/folders:w \
+        --name=docker \
+        --yes \
+        ./docker-carinata-rootful.yaml
+
+delete:
+    limactl remove docker -f
