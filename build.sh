@@ -52,6 +52,8 @@ dnf -y install --setopt=install_weak_deps=False \
   git-core \
   rsync \
   strip \
+  fedora-release-identity-cloud \
+  fedora-release-cloud \
   systemd-container \
   systemd-journal-remote \
   systemd-networkd \
@@ -63,6 +65,7 @@ dnf -y install --setopt=install_weak_deps=False \
   systemd-udev \
   tcpdump \
   traceroute \
+  qemu-guest-agent \
   udisks2-lvm2 \
   xdg-user-dirs
 
@@ -94,11 +97,18 @@ dnf -y install 'dnf5-command(config-manager)'
 dnf config-manager addrepo --from-repofile=https://download.docker.com/linux/fedora/docker-ce.repo
 dnf config-manager setopt docker-ce-stable.enabled=0
 dnf -y install --enablerepo='docker-ce-stable' docker-ce docker-ce-cli docker-compose-plugin
-systemctl enable docker
+systemctl enable docker.service
+systemctl enable docker.socket
+systemctl enable podman.service
+systemctl enable podman.socket
 systemctl preset docker.service docker.socket
 mkdir -p /usr/lib/sysctl.d
 echo "net.ipv4.ip_forward = 1" | tee /usr/lib/sysctl.d/docker-ce.conf
 echo "g docker -" | tee /usr/lib/sysusers.d/docker.conf
+
+rm -rf /opt
+mkdir -p /opt
+mkdir -p /Users # for MacOS compatibility :)
 
 KERNEL_VERSION="$(find "/usr/lib/modules" -maxdepth 1 -type d ! -path "/usr/lib/modules" -exec basename '{}' ';' | sort | tail -n 1)"
 export DRACUT_NO_XATTR=1
