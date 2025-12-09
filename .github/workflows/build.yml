@@ -30,52 +30,25 @@ jobs:
       id-token: write
     timeout-minutes: 60
     strategy:
-      fail-fast: false
+      fail-fast: true
       matrix:
         platform: ["amd64", "arm64"]
     runs-on: ${{ matrix.platform == 'amd64' && 'ubuntu-24.04' || 'ubuntu-24.04-arm' }}
-    outputs:
-      image_tag: ${{ steps.build.outputs.image_tag }}
-
     steps:
-      - name: Mount BTRFS for podman storage
-        if: ${{ matrix.platform != 'arm64' }}
-        uses: ublue-os/container-storage-action@911baca08baf30c8654933e9e9723cb399892140
-        continue-on-error: true
-        with:
-          target-dir: /var/lib/containers
-          mount-opts: compress-force=zstd:2
-
       - name: Checkout
         uses: actions/checkout@8e8c483db84b4bee98b60c0593521ed34d9990e8 # v6
 
       - name: Build image
-        id: build
-        run: |
-          set -x
-          podman build -t "${IMAGE_NAME}:${DEFAULT_TAG}" -f ./Containerfile .
-          echo "image_tag=${DEFAULT_TAG}" >> "${GITHUB_OUTPUT}"
-
-      - name: Load Image
-        id: load
-        if: github.event_name != 'pull_request' && github.ref == format('refs/heads/{0}', github.event.repository.default_branch)
-        run: |
-          set -x
-          IMAGE="localhost/${IMAGE_NAME}:${DEFAULT_TAG}"
-          podman image tag "${IMAGE}" "${IMAGE_REGISTRY}/${IMAGE_NAME}:${DEFAULT_TAG}"
-
-          IMAGE="${IMAGE_REGISTRY}/${IMAGE_NAME}:${DEFAULT_TAG}"
-          IMAGE_DIGEST="$(podman image inspect --format '{{.Digest}}' "${IMAGE}")"
-          echo "image=${IMAGE}" >> "${GITHUB_OUTPUT}"
-          echo "digest=${IMAGE_DIGEST}" >> "${GITHUB_OUTPUT}"
+        run: podman build -t "${IMAGE_NAME}:${DEFAULT_TAG}" -f ./Containerfile .
 
       - name: Login to GitHub Container Registry
         if: github.event_name != 'pull_request' && github.ref == format('refs/heads/{0}', github.event.repository.default_branch)
         env:
-          REGISTRY: ghcr.io
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          LOGIN_USER: ${{ github.actor }}
         run: |
-          echo "${{ secrets.GITHUB_TOKEN }}" | podman login -u "${{ github.actor }}" --password-stdin "${REGISTRY}"
-          echo "${{ secrets.GITHUB_TOKEN }}" | docker login -u "${{ github.actor }}" --password-stdin "${REGISTRY}"
+          echo "${GITHUB_TOKEN}" | podman login -u "${LOGIN_USER}" --password-stdin "ghcr.io"
+          echo "${GITHUB_TOKEN}" | docker login -u "${LOGIN_USER}" --password-stdin "ghcr.io"
 
       - name: Push to GHCR
         if: github.event_name != 'pull_request' && github.ref == format('refs/heads/{0}', github.event.repository.default_branch)
@@ -88,11 +61,11 @@ jobs:
           MAX_RETRIES: 3
         run: |
           set -x
-          podman tag "${IMAGE_REGISTRY}/${IMAGE_NAME}:${DEFAULT_TAG}" "${IMAGE_REGISTRY}/${IMAGE_NAME}:${DEFAULT_TAG}-${PLATFORM}"
+
           for i in $(seq "${MAX_RETRIES}"); do
-            podman push --digestfile=/tmp/digestfile "${IMAGE_REGISTRY}/${IMAGE_NAME}:${DEFAULT_TAG}-${PLATFORM}" && break || sleep $((5 * i));
+            podman push --digestfile=/tmp/digestfile "localhost/${IMAGE_NAME}:${DEFAULT_TAG}" "${IMAGE_REGISTRY}/${IMAGE_NAME}:${DEFAULT_TAG}-${PLATFORM}" && break || sleep $((5 * i));
           done
-          echo "remote_image_digest=$(< /tmp/digestfile)" >> $GITHUB_OUTPUT
+          echo "remote_image_digest=$(< /tmp/digestfile)" | tee "${GITHUB_OUTPUT}"
 
       - name: Install Cosign
         uses: sigstore/cosign-installer@faadad0cce49287aee09b3a48701e75088a2c6ad # v4.0.0
@@ -134,21 +107,15 @@ jobs:
     needs:
       - build_push
     container:
-      image: cgr.dev/chainguard/wolfi-base:latest
+      image: docker.io/library/alpine:latest
       options: --privileged --security-opt seccomp=unconfined
     permissions:
       contents: read
       packages: write
       id-token: write
-    outputs:
-      image: ${{ steps.push_manifest.outputs.IMAGE }}
-      digest: ${{ steps.push_manifest.outputs.DIGEST }}
     steps:
       - name: Install dependencies
-        run: |
-          apk add jq git podman uutils bash conmon crun netavark fuse-overlayfs libstdc++ bash-binsh grep sed coreutils docker findutils bash curl
-          mkdir -p /etc/containers
-          echo '{"default":[{"type":"insecureAcceptAnything"}]}' | jq . | tee /etc/containers/policy.json
+        run: apk add bash coreutils curl docker findutils git grep jq podman sed
 
       # Necessary until bootc supports Cosign v3
       - name: Install old cosign
@@ -159,59 +126,52 @@ jobs:
           curl --retry 3 -H "Authorization: Bearer ${GITHUB_TOKEN}" -fsSLo "/usr/bin/cosign" "https://github.com/sigstore/cosign/releases/download/v2.6.1/cosign-linux-amd64"
           chmod +x /usr/bin/cosign
 
-      # FIXME: REMOVE THIS PLEASE <https://docs.github.com/en/actions/reference/workflows-and-actions/workflow-syntax#jobsjob_idstrategyfail-fast>
       - name: Exit on failure
+        shell: bash
         env:
           JOBS: ${{ toJson(needs) }}
         run: |
-          echo "Job status:"
-          $JOBS | jq -r 'to_entries[] | " - \(.key): \(.value.result)"'
-
-          for i in $(echo "${JOBS}" | jq -r 'to_entries[] | .value.result'); do
+          for i in $(jq -r 'to_entries[] | .value.result' <<< "${JOBS}"); do
             if [ "$i" != "success" ] && [ "$i" != "skipped" ]; then
-              echo ""
               echo "Status check not okay!"
               exit 1
             fi
           done
 
+        # This generates a timestamp like what is defined on the ArtifactHub documentation
+        # E.G: 2022-02-08T15:38:15Z'
+        # https://artifacthub.io/docs/topics/repositories/container-images/
+        # https://linux.die.net/man/1/date
       - name: Get current date
         id: date
-        run: |
-          # This generates a timestamp like what is defined on the ArtifactHub documentation
-          # E.G: 2022-02-08T15:38:15Z'
-          # https://artifacthub.io/docs/topics/repositories/container-images/
-          # https://linux.die.net/man/1/date
-          echo "date=$(date -u +%Y\-%m\-%d\T%H\:%M\:%S\Z)" >> $GITHUB_OUTPUT
+        run: echo "date=$(date -u +%Y\-%m\-%d\T%H\:%M\:%S\Z)" | tee "${GITHUB_OUTPUT}"
 
       - name: Image Metadata
-        uses: docker/metadata-action@c299e40c65443455700f0fdfc63efafe5b349051 # v5
+        uses: docker/metadata-action@c1e51972afc2121e065aed6d45c65596fe445f3f # v5
         id: metadata
         with:
-          sep-tags: " "
-          sep-annotations: " "
           tags: |
             type=raw,value=${{ env.DEFAULT_TAG }}
             type=raw,value=${{ env.DEFAULT_TAG }}.{{date 'YYYYMMDD'}}
             type=raw,value={{date 'YYYYMMDD'}}
-            type=sha,enable=${{ github.event_name == 'pull_request' }}
             type=ref,event=pr
+            type=sha,enable=${{ github.event_name == 'pull_request' }}
           labels: |
-            io.artifacthub.package.readme-url=https://raw.githubusercontent.com/${{ github.repository_owner }}/${{ env.IMAGE_NAME }}/refs/heads/main/README.md
-            org.opencontainers.image.created=${{ steps.date.outputs.date }}
-            org.opencontainers.image.description=${{ env.IMAGE_DESC }}
-            org.opencontainers.image.documentation=https://raw.githubusercontent.com/${{ github.repository_owner }}/${{ env.IMAGE_NAME }}/refs/heads/main/README.md
-            org.opencontainers.image.source=https://github.com/${{ github.repository_owner }}/${{ env.IMAGE_NAME }}/blob/main/Containerfile
-            org.opencontainers.image.title=${{ env.IMAGE_NAME }}
-            org.opencontainers.image.url=https://github.com/${{ github.repository_owner }}/${{ env.IMAGE_NAME }}
-            org.opencontainers.image.vendor=${{ github.repository_owner }}
-            org.opencontainers.image.version=${{ env.DEFAULT_TAG }}.{{date 'YYYYMMDD'}}
+            containers.bootc=1
             io.artifacthub.package.deprecated=false
             io.artifacthub.package.keywords=${{ env.IMAGE_KEYWORDS }}
-            io.artifacthub.package.license=AGPL-3.0
+            io.artifacthub.package.license=Apache-2.0
             io.artifacthub.package.logo-url=${{ env.IMAGE_LOGO_URL }}
             io.artifacthub.package.prerelease=false
-            containers.bootc=1
+            io.artifacthub.package.readme-url=https://raw.githubusercontent.com/${{ github.repository_owner }}/${{ env.IMAGE_NAME }}/${{ github.sha }}/README.md
+            org.opencontainers.image.created=${{ steps.date.outputs.date }}
+            org.opencontainers.image.description=${{ env.IMAGE_DESC }}
+            org.opencontainers.image.documentation=https://raw.githubusercontent.com/${{ github.repository_owner }}/${{ env.IMAGE_NAME }}/${{ github.sha }}/README.md
+            org.opencontainers.image.source=https://github.com/${{ github.repository_owner }}/${{ env.IMAGE_NAME }}/blob/${{ github.sha }}/Containerfile
+            org.opencontainers.image.title=${{ env.IMAGE_NAME }}
+            org.opencontainers.image.url=https://github.com/${{ github.repository_owner }}/${{ env.IMAGE_NAME }}/tree/${{ github.sha }}
+            org.opencontainers.image.vendor=${{ github.repository_owner }}
+            org.opencontainers.image.version=${{ env.DEFAULT_TAG }}.{{date 'YYYYMMDD'}}
 
       - name: Fetch Build Outputs
         if: github.event_name != 'pull_request' && github.ref == format('refs/heads/{0}', github.event.repository.default_branch)
@@ -223,15 +183,16 @@ jobs:
 
       - name: Load Outputs
         if: github.event_name != 'pull_request' && github.ref == format('refs/heads/{0}', github.event.repository.default_branch)
+        shell: bash
         id: load-outputs
         run: |
           set -x
           OUTCSV="$(mktemp)"
           for digest_file in /tmp/artifacts/*.txt; do
             # Extract the platform from the file name
-            PLATFORM="$(basename "${digest_file}" ".txt" | sed 's/.*-//g')" # amd64, arm64
+            PLATFORM="$(basename "${digest_file}" ".txt" | sed 's/.*-//g')"
             IMAGE_NAME="$(basename "${digest_file}" ".txt" | grep -Po ".*-" | sed 's/-$//')"
-            DIGEST="$(cat "${digest_file}")"
+            DIGEST="$(< "${digest_file}")"
             echo "${PLATFORM},${IMAGE_NAME},${DIGEST}" | tee -a "${OUTCSV}"
           done
           echo "OUTPUT_CSV=$(base32 -w 0 < "${OUTCSV}")" | tee -a "${GITHUB_OUTPUT}"
@@ -260,24 +221,24 @@ jobs:
           echo "${OUTPUT_CSV}" | base32 -d | tee "${OUTPUT_CSV_FILE}"
 
           # This is insanely dumb, please PR if you have a better solution ~ @tulilirockz :3c
-          IMAGES=$(cat "${OUTPUT_CSV_FILE}" | while IFS=$'\n' read -r entry ; do echo $entry | cut -d, -f2 ; done | sort | uniq | tr "\n" " " | sed 's/.$//')
+          IMAGES=$(cat "${OUTPUT_CSV_FILE}" | while IFS=$'\n' read -r ENTRY ; do echo "${ENTRY}" | cut -d, -f2 ; done | sort | uniq | tr "\n" " " | sed 's/.$//')
           for TARGET_IMAGE in ${IMAGES} ; do
             TARGET_MANIFEST="${IMAGE_REGISTRY}/${TARGET_IMAGE}"
             podman manifest create "${TARGET_MANIFEST}"
 
-            PLATFORMS=$(grep -F -e "${IMAGE}" "${OUTPUT_CSV_FILE}" | while IFS=$'\n' read -r entry ; do echo $entry | cut -d, -f1 ; done | sort | uniq | tr "\n" " " | sed 's/.$//')
+            PLATFORMS=$(grep -F -e "${IMAGE}" "${OUTPUT_CSV_FILE}" | while IFS=$'\n' read -r ENTRY ; do echo "${ENTRY}" | cut -d, -f1 ; done | sort | uniq | tr "\n" " " | sed 's/.$//')
             for TARGET_PLATFORM in ${PLATFORMS} ; do
-              TARGET_DIGEST="$(grep -F -e ",${TARGET_IMAGE}," "${OUTPUT_CSV_FILE}" | grep -F -e "$TARGET_PLATFORM" | cut -d, -f3 | tr -d "\n")"
+              TARGET_DIGEST="$(grep -F -e ",${TARGET_IMAGE}," "${OUTPUT_CSV_FILE}" | grep -F -e "${TARGET_PLATFORM}" | cut -d, -f3 | tr -d "\n")"
               podman manifest add "${TARGET_MANIFEST}" "${TARGET_MANIFEST}@${TARGET_DIGEST}" --arch "${TARGET_PLATFORM}"
             done
 
-            while IFS= read -r label; do
-              podman manifest annotate --index --annotation "$label" "${TARGET_MANIFEST}"
+            while IFS= read -r LABEL; do
+              podman manifest annotate --index --annotation "${LABEL}" "${TARGET_MANIFEST}"
             done <<< "${LABELS}"
 
-            for TARGET_TAG in ${TAGS} ; do
+            while IFS= read -r TAGS; do
               podman manifest push --all=false --digestfile=/tmp/digestfile "${TARGET_MANIFEST}" "${TARGET_MANIFEST}:${TARGET_TAG}"
-            done
+            done <<< "${TAGS}"
 
-            cosign sign -y --key env://COSIGN_PRIVATE_KEY "${TARGET_MANIFEST}@$(< /tmp/digestfile)"
+            /tmp/cosign sign -y --key env://COSIGN_PRIVATE_KEY "${TARGET_MANIFEST}@$(< /tmp/digestfile)"
           done
