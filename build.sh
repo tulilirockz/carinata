@@ -49,7 +49,7 @@ dnf -y remove \
   wcurl \
   xkeyboard-config
 
-dnf install -y cloud-init qemu-guest-agent
+dnf install -y cloud-init qemu-guest-agent rsync # These are all required for Lima in one way or another
 
 systemctl enable NetworkManager
 systemctl enable systemd-timesyncd

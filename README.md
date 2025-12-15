@@ -10,8 +10,7 @@
 Apply the manifest like the following:
 
 ```bash
-limactl create --name=docker --mount /var/folders:w --mount /private/var/folders:w --yes https://raw.githubusercontent.com/tulilirockz/carinata/refs/heads/main/docker-carinata-rootful.yaml
-# Remove the `/var/folders` binds on linux!
+limactl create --name=docker --yes https://raw.githubusercontent.com/tulilirockz/carinata/refs/heads/main/docker-carinata-rootful.yaml
 ```
 
 This will create a virtual machine called `docker` that will have the `docker.sock` socket exposed to your system, which can be used as a context on your host system:
