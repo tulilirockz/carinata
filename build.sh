@@ -77,7 +77,7 @@ systemctl preset systemd-resolved.service
 dnf -y install 'dnf5-command(config-manager)'
 dnf config-manager addrepo --from-repofile=https://download.docker.com/linux/fedora/docker-ce.repo
 dnf config-manager setopt docker-ce-stable.enabled=0
-dnf -y install --enablerepo='docker-ce-stable' -x docker-compose-plugin docker-ce docker-ce-cli
+dnf -y install --enablerepo='docker-ce-stable' -x docker-compose-plugin docker-ce docker-ce-cli docker-buildx-plugin containerd.io
 
 tee /usr/lib/systemd/system-preset/92-docker-default.preset <<'EOF'
 enable docker.service
