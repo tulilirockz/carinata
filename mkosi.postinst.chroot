@@ -1,0 +1,39 @@
+#!/bin/bash
+set -xeuo pipefail
+
+ln -s fedora-release /usr/lib/system-release
+
+(
+    . /usr/lib/os-release
+    IMAGE_NAME="carinata"
+    IMAGE_AUTHOR="tulilirockz"
+    HOME_URL="https://github.com/tulilirockz/carinata"
+
+    tee /usr/lib/os-release <<EOF
+NAME="${IMAGE_NAME^}"
+ID="${IMAGE_NAME}"
+ID_LIKE="$ID"
+PRETTY_NAME="${IMAGE_NAME^}"
+FANCY_NAME="\033[0;38:2:252:186:3;1;49m⸭\033[0;38:2:252:186:3;49m ${IMAGE_NAME^} \033[0m"
+VERSION="$VERSION"
+VERSION_ID="$VERSION_ID"
+VERSION_CODENAME="Pibble"
+ANSI_COLOR="38:2:252:186:3;1;49"
+ANSI_COLOR_REVERSE="48;2;252;186;3;1;30"
+LOGO="${IMAGE_NAME}"
+HOME_URL="${HOME_URL}"
+BUG_REPORT_URL="${HOME_URL}/issues"
+SUPPORT_URL=\"${HOME_URL}/issues
+CPE_NAME="cpe:/o:${IMAGE_AUTHOR}:${IMAGE_NAME}"
+DOCUMENTATION_URL="${HOME_URL}"
+DEFAULT_HOSTNAME="${IMAGE_NAME}-????-????"
+EOF
+
+    tee /usr/lib/issue <<EOF
+\e[0;38:2:252:186:3;1;49m▒\e[0m \e[0;38:2:252:186:3;1;49m⸭\e[0;38:2:252:186:3;49m ${IMAGE_NAME^} \e[0m
+\e[0;38:2:252:186:3;1;49m▒\e[0m Kernel \r on an \m (\l)
+
+EOF
+)
+
+ln -sf /var/home /Users # macOS compat
